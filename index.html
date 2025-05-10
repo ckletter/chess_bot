@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chess Board</title>
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- chessboard.js CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/@chrisguttandin/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+    <!-- chessboard.js JavaScript -->
+    <script src="https://unpkg.com/@chrisguttandin/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+    <!-- chess.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <style>
+        .board {
+            width: 400px;
+            margin: 20px auto;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="board" id="board"></div>
+    <div class="controls">
+        <button id="startBtn">Start New Game</button>
+        <button id="randomMoveBtn">Make Random Move</button>
+    </div>
+
+    <script>
+        // Initialize the chess game
+        const chess = new Chess();
+        
+        // Initialize the board
+        const board = Chessboard('board', {
+            position: 'start',
+            draggable: true,
+            onDrop: function(source, target) {
+                // Check if the move is legal
+                const move = chess.move({
+                    from: source,
+                    to: target,
+                    promotion: 'q' // Always promote to queen for simplicity
+                });
+                
+                // If the move is illegal, snap back
+                if (move === null) return 'snapback';
+            }
+        });
+
+        // Start a new game
+        $('#startBtn').on('click', function() {
+            chess.reset();
+            board.start();
+        });
+
+        // Make a random move
+        $('#randomMoveBtn').on('click', function() {
+            const moves = chess.moves();
+            if (moves.length > 0) {
+                const randomMove = moves[Math.floor(Math.random() * moves.length)];
+                chess.move(randomMove);
+                board.position(chess.fen());
+            }
+        });
+    </script>
+</body>
+</html> 

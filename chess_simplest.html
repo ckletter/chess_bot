@@ -1,0 +1,176 @@
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chess Game</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css">
+  <style>
+    #board {
+      width: 400px;
+      margin: 20px auto;
+    }
+    .controls {
+      width: 400px;
+      margin: 0 auto;
+      text-align: center;
+      padding: 10px;
+    }
+    button {
+      padding: 8px 16px;
+      margin: 5px;
+      cursor: pointer;
+    }
+    #status {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+    #moveHistory {
+      width: 400px;
+      margin: 10px auto;
+      padding: 10px;
+      border: 1px solid #ccc;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+
+<div id="board"></div>
+<div class="controls">
+  <button id="resetBtn">Reset Board</button>
+  <div id="status">Your turn (white)</div>
+</div>
+<div id="moveHistory">
+  <strong>Move History:</strong>
+  <div id="moves"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"></script>
+<script>
+  // Initialize chess.js game instance
+  const game = new Chess();
+  let moveCounter = 1;
+  
+  // Initialize the board
+  const config = {
+    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+    position: 'start',
+    draggable: true,
+    onDrop: handleMove
+  };
+  
+  const board = Chessboard('board', config);
+  
+  // Add a move to the history display
+  function addMoveToHistory(moveText) {
+    const movesDiv = document.getElementById('moves');
+    movesDiv.innerHTML += moveText + '<br>';
+    movesDiv.scrollTop = movesDiv.scrollHeight;
+  }
+  
+  // Handle piece moves
+  function handleMove(source, target) {
+    console.log(`Player attempting move: ${source} to ${target}`);
+    
+    // Try to make the move
+    const move = game.move({
+      from: source,
+      to: target,
+      promotion: 'q' // Always promote to queen for simplicity
+    });
+    
+    // If illegal move, snap back
+    if (move === null) {
+      console.log('Illegal move attempted');
+      return 'snapback';
+    }
+    
+    console.log('Player move successful:', move);
+    addMoveToHistory(`${moveCounter}. ${source}-${target} (player)`);
+    
+    // Update status
+    updateStatus("Computer is thinking...");
+    
+    // Get computer's move
+    getComputerMove();
+  }
+  
+  // Reset the game
+  function resetGame() {
+    console.log('Resetting game');
+    game.reset();
+    board.position('start', false);
+    updateStatus("Your turn (white)");
+    document.getElementById('moves').innerHTML = '';
+    moveCounter = 1;
+  }
+  
+  // Update status message
+  function updateStatus(message) {
+    document.getElementById('status').textContent = message;
+  }
+  
+  // Get computer move from Flask backend
+  function getComputerMove() {
+    console.log('Requesting computer move with FEN:', game.fen());
+    
+    fetch('/make_move', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        fen: game.fen()
+      }),
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log("Computer move received:", data.move);
+      
+      // Parse the move (e.g., "b8c6" to {from: 'b8', to: 'c6'})
+      const from = data.move.substring(0, 2);
+      const to = data.move.substring(2, 4);
+      
+      // Apply computer's move to the game
+      const move = game.move({
+        from: from,
+        to: to,
+        promotion: 'q' // Always promote to queen for simplicity
+      });
+      
+      console.log('Computer move applied to game:', move);
+      console.log('New FEN:', game.fen());
+      addMoveToHistory(`${moveCounter++}. ${from}-${to} (computer)`);
+      
+      // Update board position - force redraw
+      board.position(game.fen(), true);
+      console.log('Board position updated');
+      
+      // Check game status
+      if (game.in_checkmate()) {
+        updateStatus("Checkmate!");
+      } else if (game.in_draw()) {
+        updateStatus("Game ended in draw!");
+      } else {
+        updateStatus("Your turn (white)");
+      }
+    })
+    .catch(error => {
+      console.error('Error getting computer move:', error);
+      updateStatus("Error: Couldn't get computer move");
+    });
+  }
+  
+  // Add event listener to reset button
+  document.getElementById('resetBtn').addEventListener('click', resetGame);
+</script>
+
+</body>
+</html>
