@@ -31,6 +31,42 @@
       max-height: 150px;
       overflow-y: auto;
     }
+    .win-screen {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.7);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .win-content {
+      background-color: white;
+      padding: 20px;
+      border-radius: 10px;
+      text-align: center;
+      max-width: 400px;
+    }
+    .win-content h2 {
+      color: #2C8A3D;
+      margin-top: 0;
+    }
+    .win-content button {
+      background-color: #2C8A3D;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    .win-content button:hover {
+      background-color: #236b30;
+    }
   </style>
 </head>
 <body>
@@ -45,6 +81,15 @@
   <div id="moves"></div>
 </div>
 
+<!-- Win Screen -->
+<div id="winScreen" class="win-screen">
+  <div class="win-content">
+    <h2 id="winMessage">Checkmate!</h2>
+    <p id="winDetails">You won the game!</p>
+    <button id="playAgainBtn">Play Again</button>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"></script>
@@ -52,7 +97,7 @@
   // Initialize chess.js game instance
   const game = new Chess();
   let moveCounter = 1;
-  
+
   // Initialize the board
   const config = {
     pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
@@ -60,43 +105,62 @@
     draggable: true,
     onDrop: handleMove
   };
-  
+
   const board = Chessboard('board', config);
-  
+
   // Add a move to the history display
   function addMoveToHistory(moveText) {
     const movesDiv = document.getElementById('moves');
     movesDiv.innerHTML += moveText + '<br>';
     movesDiv.scrollTop = movesDiv.scrollHeight;
   }
-  
+
   // Handle piece moves
   function handleMove(source, target) {
     console.log(`Player attempting move: ${source} to ${target}`);
-    
+
     // Try to make the move
     const move = game.move({
       from: source,
       to: target,
       promotion: 'q' // Always promote to queen for simplicity
     });
-    
+
     // If illegal move, snap back
     if (move === null) {
       console.log('Illegal move attempted');
       return 'snapback';
     }
-    
+
     console.log('Player move successful:', move);
-    addMoveToHistory(`${moveCounter}. ${source}-${target} (player)`);
-    
+
+    // Check if this was a castle move
+    let moveNotation = `${source}-${target}`;
+    if (move.san === 'O-O' || move.san === 'O-O-O') {
+      moveNotation += ` (${move.san === 'O-O' ? 'kingside castle' : 'queenside castle'})`;
+    }
+
+    addMoveToHistory(`${moveCounter}. ${moveNotation} (player)`);
+
+    // Important: Force board redraw with current position to display the complete castle
+    board.position(game.fen(), true);
+
+    // Check if player's move resulted in checkmate or draw
+    if (game.in_checkmate()) {
+      showWinScreen("Checkmate!", "You won the game!");
+      return;
+    } else if (game.in_draw()) {
+      showWinScreen("Draw!", "The game ended in a draw.");
+      return;
+    }
+
     // Update status
     updateStatus("Computer is thinking...");
-    
-    // Get computer's move
-    getComputerMove();
+
+    // Get computer's move (with a slight delay to ensure UI updates first)
+    setTimeout(getComputerMove, 100);
   }
-  
+
   // Reset the game
   function resetGame() {
     console.log('Resetting game');
@@ -105,17 +169,31 @@
     updateStatus("Your turn (white)");
     document.getElementById('moves').innerHTML = '';
     moveCounter = 1;
+    hideWinScreen();
   }
-  
+
   // Update status message
   function updateStatus(message) {
     document.getElementById('status').textContent = message;
   }
-  
+
+  // Show win screen
+  function showWinScreen(title, message) {
+    document.getElementById('winMessage').textContent = title;
+    document.getElementById('winDetails').textContent = message;
+    document.getElementById('winScreen').style.display = 'flex';
+    updateStatus(title);
+  }
+
+  // Hide win screen
+  function hideWinScreen() {
+    document.getElementById('winScreen').style.display = 'none';
+  }
+
   // Get computer move from Flask backend
   function getComputerMove() {
     console.log('Requesting computer move with FEN:', game.fen());
-    
+
     fetch('/make_move', {
       method: 'POST',
       headers: {
@@ -133,43 +211,52 @@
     })
     .then(data => {
       console.log("Computer move received:", data.move);
-      
+
       // Parse the move (e.g., "b8c6" to {from: 'b8', to: 'c6'})
       const from = data.move.substring(0, 2);
       const to = data.move.substring(2, 4);
-      
+
       // Apply computer's move to the game
       const move = game.move({
         from: from,
         to: to,
         promotion: 'q' // Always promote to queen for simplicity
       });
-      
+
       console.log('Computer move applied to game:', move);
       console.log('New FEN:', game.fen());
-      addMoveToHistory(`${moveCounter++}. ${from}-${to} (computer)`);
-      
+
+      // Check if this was a castle move
+      let moveNotation = `${from}-${to}`;
+      if (move.san === 'O-O' || move.san === 'O-O-O') {
+        moveNotation += ` (${move.san === 'O-O' ? 'kingside castle' : 'queenside castle'})`;
+      }
+
+      addMoveToHistory(`${moveCounter++}. ${moveNotation} (computer)`);
+
       // Update board position - force redraw
       board.position(game.fen(), true);
       console.log('Board position updated');
-      
+
       // Check game status
       if (game.in_checkmate()) {
-        updateStatus("Checkmate!");
+        showWinScreen("Checkmate!", "Computer won the game!");
       } else if (game.in_draw()) {
-        updateStatus("Game ended in draw!");
+        showWinScreen("Draw!", "The game ended in a draw.");
       } else {
         updateStatus("Your turn (white)");
       }
     })
     .catch(error => {
       console.error('Error getting computer move:', error);
-      updateStatus("Error: Couldn't get computer move");
+      updateStatus("Error: Couldn't get computer move. Please try again.");
     });
   }
-  
+
   // Add event listener to reset button
   document.getElementById('resetBtn').addEventListener('click', resetGame);
+  // Add event listener to play again button
+  document.getElementById('playAgainBtn').addEventListener('click', resetGame);
 </script>
 
 </body>

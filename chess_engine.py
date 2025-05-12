@@ -1,9 +1,10 @@
 import chess
+import chess.polyglot
 import random
 import time
 
 class ChessEngine:
-    # Piece-square tables for  each piece
+    # Piece-square tables for each piece
     PAWN_TABLE = [
         0,  0,  0,  0,  0,  0,  0,  0,
         50, 50, 50, 50, 50, 50, 50, 50,
@@ -70,18 +71,32 @@ class ChessEngine:
         20, 20,  0,  0,  0,  0, 20, 20,
         20, 30, 10,  0,  0, 10, 30, 20
     ]
-    
+    # King tables for endgame
+    KING_ENDGAME_TABLE = [
+        -50,-40,-30,-20,-20,-30,-40,-50,
+        -30,-20,-10,  0,  0,-10,-20,-30,
+        -30,-10, 20, 30, 30, 20,-10,-30,
+        -30,-10, 30, 40, 40, 30,-10,-30,
+        -30,-10, 30, 40, 40, 30,-10,-30,
+        -30,-10, 20, 30, 30, 20,-10,-30,
+        -30,-30,  0,  0,  0,  0,-30,-30,
+        -50,-30,-30,-30,-30,-30,-30,-50
+    ]
+
+
     # Piece values for material counting
     PIECE_VALUES = {
         chess.PAWN: 100,
         chess.KNIGHT: 320,
+        # Bishops slightly better than knights :)
         chess.BISHOP: 330,
         chess.ROOK: 500,
         chess.QUEEN: 900,
         chess.KING: 20000
     }
-    def __init__(self, depth=3):
-        self.depth = depth
+
+    # Constructor, resetting global variables like pv table and transposition tables
+    def __init__(self):
         self.MAX_DEPTH = 5  # Maximum search depth
         self.pv_table = {}  # Principal Variation table
         self.nodes_searched = 0  # Counter for total nodes searched
@@ -90,21 +105,18 @@ class ChessEngine:
         self.transposition_table = {}
         self.tt_hits = 0
     
-    def select_move(self, board, is_white=True):
-        # Simple random move selection
-        legal_moves = list(board.legal_moves)
-        if not legal_moves:
-            return None
-            
-        # For now, just return a random move
-        return random.choice(legal_moves)
-    
     def evaluate_position(self, board):
         # Simple material counting evaluation
         if board.is_checkmate():
             # If checkmate, return a large value
             return -10000 if board.turn else 10000
-        
+
+        # Check for draw
+        if board.is_stalemate() or board.is_insufficient_material():
+            return 0
+
+        # Check if endgame (two queens off the board OR less than 12 pieces total on board)
+        is_endgame = len(board.pieces(chess.QUEEN, chess.WHITE)) + len(board.pieces(chess.QUEEN, chess.BLACK)) == 0 or (len(board.piece_map()) <= 12)
         # Count material and position
         score = 0
         
@@ -129,7 +141,10 @@ class ChessEngine:
                     elif piece.piece_type == chess.QUEEN:
                         score += self.QUEEN_TABLE[square]
                     elif piece.piece_type == chess.KING:
-                        score += self.KING_TABLE[square]
+                        if is_endgame:
+                            score += self.KING_ENDGAME_TABLE[square]
+                        else:
+                            score += self.KING_TABLE[square]
                 else:
                     score -= value
                     # Subtract positional bonus (flip board for black pieces)
@@ -145,10 +160,32 @@ class ChessEngine:
                     elif piece.piece_type == chess.QUEEN:
                         score -= self.QUEEN_TABLE[flipped_square]
                     elif piece.piece_type == chess.KING:
+                        if is_endgame:
+                            score -= self.KING_ENDGAME_TABLE[flipped_square]
+                    else:
                         score -= self.KING_TABLE[flipped_square]
-                    
+
+        # White mobility
+        board.turn = chess.WHITE
+        white_mobility = len(list(board.legal_moves))
+
+        # Count black's mobility
+        board.turn = chess.BLACK
+        black_mobility = len(list(board.legal_moves))
+
+
+        # Factor in piece mobility into score with a small weight
+        score += (white_mobility - black_mobility) * 2
+
+        # Add a bishop pair bonus
+        if len(board.pieces(chess.BISHOP, chess.WHITE)) >= 2:
+            score += 50
+        if len(board.pieces(chess.BISHOP, chess.BLACK)) >= 2:
+            score -= 50
         return score
-    
+
+    """Negamax algorithm (minimax algorithm but taking the negative version of opponent's score)
+    DFS with alpha-beta pruning and time limit, max depth"""
     def negamax(self, board, current_depth, target_depth, start_time, time_limit, alpha=-float('inf'), beta=float('inf'), color=1):
         # Calculate position hash at the start
         position_hash = self.hash_position(board)
@@ -162,9 +199,9 @@ class ChessEngine:
                 self.tt_hits += 1
                 # Return stored evaluation and PV line
                 return tt_entry['score'], tt_entry['pv']
-
-        # if time.time() - start_time > time_limit:
-        #     return None, []
+        # If run out of time, return none for score
+        if time.time() - start_time > time_limit:
+            return None, []
         
         # Base case, if we've reached end of search or game is over
         if current_depth == target_depth or board.is_game_over():
@@ -184,6 +221,11 @@ class ChessEngine:
         max_score = -float('inf')
         best_move = None
         pv_line = []
+
+        # # Track a "best so far" move even if we time out
+        # current_best_move = None
+        # current_best_score = -float('inf')
+        # current_best_line = []
         
         # Get ordered moves
         moves = self.order_moves(board, current_depth)
@@ -191,21 +233,39 @@ class ChessEngine:
         
         for move in moves:
             board.push(move)
+            # If timeout occurred
+            # if time.time() - start_time > time_limit:
+            #     board.pop()
+            #     # If we have at least one move evaluated at this depth, return current best move seen
+            #     if current_best_move:
+            #         return current_best_score, [current_best_move] + current_best_line
+            #     # If no move evaluated at depth, return current best move
+            #     return None, []
+
             # Get the score and line from the recursive call, negate alpha and beta and switch
             # Because we are using negamax, perspective of best and worst outcome must be flipped
             score, line = self.negamax(board, current_depth + 1, target_depth, start_time, time_limit, -beta, -alpha, -color)
-            # # If timeout occurred
-            # if score == None:
-            #     # If there is another branch with a best move, add that to the pv line and return that score
-            #     if best_move:
-            #         return max_score, [best_move] + line
-            #     # If there is no branch with a best move, continue to return None as score so the engine can choose a branch it has actually evaluated
-            #     else:
-            #         return None, []
+            # If timeout occurred
+            if score is None:
+                return None, []
             # Negate opponent's score by negamax algorithm
             score = -score
             board.pop()
-            
+
+            # If timeout occurred in deeper recursive call
+            # if score is None:
+            #     # If we have at least one move evaluated at this depth, return it
+            #     if current_best_move:
+            #         return current_best_score, [current_best_move] + current_best_line
+            #     # If no move evaluated at depth, return current best move
+            #     return None, []
+
+            # Update current best at this depth
+            # if score > current_best_score:
+            #     current_best_score = score
+            #     current_best_move = move
+            #     current_best_line = line
+            # Update best score seen
             if score > max_score:
                 max_score = score
                 best_move = move
@@ -226,10 +286,9 @@ class ChessEngine:
         }
         return max_score, pv_line
 
-    """
-        Performs negamax search with iterative deepening and time management
-        """
-    def iterative_deepening(self, board, time_limit=3.0):
+    """Performs iterative deepening, calling negamax algorithm with a time limit of 3.5 seconds
+    Point of iterative deepening is to improve move ordering at each iterative layer with 'pv'"""
+    def iterative_deepening(self, board, time_limit=3.5):
         start_time = time.time()
         best_move = None
         best_score = -float('inf')
@@ -247,9 +306,13 @@ class ChessEngine:
             depth_start_time = time.time()
             
             # Search at current depth, setting color to 1 if white, -1 if black
-            best_score, pv = self.negamax(board, 0, depth, start_time, time_limit, -float('inf'), float('inf'), 1 if board.turn else -1)
-            
+            score, pv = self.negamax(board, 0, depth, start_time, time_limit, -float('inf'), float('inf'), 1 if board.turn else -1)
 
+            # If timeout occurred while performing DFS, return the best move from the previous iteration
+            if score is None:
+                return best_move, best_score, principal_variation
+            # Update new best score
+            best_score = score
             # Update Principal Variation at each depth index with new "best" Principal Variation sequence
             for current_depth in range(1, depth + 1):
                 self.pv_table[current_depth] = pv[0:current_depth]
@@ -319,7 +382,9 @@ class ChessEngine:
     #     # Calculate the score based on captured piece and attacker piece values
     #     score = 100 + captured_value - attacker_value
     #     return score
-
+    """
+    Initializes position hash with 64 bit random numbers for each piece on each square, random numbers for castling, 
+    en passant files, side to move"""
     def init_zobrist_hash(self):
         hash = 0
         # Create array of size 64x2x7
@@ -346,6 +411,9 @@ class ChessEngine:
             'castling_keys': castling_keys,
             'en_passant_keys': en_passant_keys
         }
+    """
+    Hashes the current position using the zobrist hash values in the initialization function
+    XOR operations (which are commutative and associative) to find the exact zobrist hash for current position"""
     def hash_position(self, board):
         hash = 0
         for square in chess.SQUARES:
@@ -384,102 +452,100 @@ class ChessEngine:
             hash ^= self.zobrist_hash['en_passant_keys'][file]
         return hash
 
-    def score_move_heuristically(self, board, move):
-        score = 0
-        if board.is_capture(move):
-            score += self.evaluate_capture_move(board, move)
-        if board.is_check(move):
-            score += 50
-        if move.is_promotion(move):
-            score += 80
-        return score
-    
-    # def find_best_move(self, board):
-    #     """
-    #     Find the best move using negamax with alpha-beta pruning.
-        
-    #     Args:
-    #         board (chess.Board): The current board position
-            
-    #     Returns:
-    #         chess.Move: The best move found
-    #     """
-    #     best_move = None
-    #     best_value = -float('inf')
-    #     alpha = -float('inf')
-    #     beta = float('inf')
-        
-    #     # Determine color based on whose turn it is
-    #     color = 1 if board.turn == chess.WHITE else -1
-        
-    #     for move in board.legal_moves:
-    #         board.push(move)
-    #         board_value = -self.negamax(board, self.depth - 1, -beta, -alpha, -color)
-    #         board.pop()
-            
-    #         if board_value > best_value:
-    #             best_value = board_value
-    #             best_move = move
-                
-    #         alpha = max(alpha, best_value)
-            
-    #     return best_move
-
-# Example usage
-if __name__ == "__main__":
-    # Create a new board
-    board = chess.Board()
-    
-    # Initialize the engine
-    engine = ChessEngine(depth=3)
-    
-    
-    print("\nStarting position:")
-    print(board)
-    moves_played = 0
-
-    # Main game loop
-    while not board.is_game_over():
-        moves_played += 1
-        # Every 20 moves, clear table
-        engine.transposition_table = {}
-
-        # Check if it's the user's turn (white)
-        if board.turn == chess.WHITE:
-            # Get user input
-            user_input = input("\nYour move (or command): ").strip().lower()
-           
-            # Try to make the user's move
-            try:
-                move = chess.Move.from_uci(user_input)
-                if move in board.legal_moves:
-                    board.push(move)
-                    print("\nYou played:", move)
-                    print(board)
-                else:
-                    print("Illegal move! Try again.")
-            except ValueError:
-                print("Invalid move format! Use format like 'e2e4'")
-        else:
-            # Computer's turn (black)
-            print("\nComputer is thinking...")
-            best_move, best_score, principal_variation = engine.iterative_deepening(board)
-            print(best_move)
-            board.push(best_move)
-            print("Computer played:", best_move)
-            print("Principal variation:", " ".join(str(move) for move in principal_variation))
-            print(board)
-    
-    # Game over
-    if board.is_game_over():
-        result = board.outcome().result()
-        if result == "1-0":
-            print("\nGame over! You won!")
-        elif result == "0-1":
-            print("\nGame over! Computer won!")
-        else:
-            print("\nGame over! It's a draw!")
-        
-        print("Final position:")
+    # def score_move_heuristically(self, board, move):
+    #     score = 0
+    #     if board.is_capture(move):
+    #         score += self.evaluate_capture_move(board, move)
+    #     if board.is_check(move):
+    #         score += 50
+    #     if move.is_promotion(move):
+    #         score += 80
+    #     return score
+    """
+    Main method of chess engine, handles both user and computer moves
+    """
+    def play_game(self):
+        # Create a new board
+        board = chess.Board()
+        print("\nStarting position:")
         print(board)
-        print("PGN:", board.variation_san(board.move_stack)) 
+        moves_played = 0
+        # Flag to track if we've deviated from the book
+        book_deviation = False
+
+        # Load the opening book
+        reader = chess.polyglot.open_reader("Perfect2023.bin")
+
+        # Main game loop
+        while not board.is_game_over():
+            moves_played += 1
+            # Every 20 moves, clear table
+            self.transposition_table = {}
+
+            # Check if it's the user's turn (white)
+            if board.turn == chess.WHITE:
+                # Get user input
+                user_input = input("\nYour move (or command): ").strip().lower()
+
+                # Try to make the user's move
+                try:
+                    move = chess.Move.from_uci(user_input)
+                    if move in board.legal_moves:
+                        board.push(move)
+                        print("\nYou played:", move)
+                        print(board)
+                    else:
+                        print("Illegal move! Try again.")
+                except ValueError:
+                    print("Invalid move format! Use format like 'e2e4'")
+            else:
+                # Computer's turn (black)
+                print("\nComputer is thinking...")
+
+                if not book_deviation:
+                    # Check if there's a book move available
+                    book_move = None
+                    for entry in reader.find_all(board):
+                        book_move = entry.move
+                        break  # Take the first available book move
+
+                    if book_move:
+                        board.push(book_move)
+                        print("Computer played book move:", book_move)
+                        print(board)
+                    else:
+                        # Mark that we deviated from book
+                        book_deviation = True
+                        best_move, best_score, principal_variation = engine.iterative_deepening(board)
+                        board.push(best_move)
+                        print("Computer played:", best_move)
+                        print("Principal variation:", " ".join(str(move) for move in principal_variation))
+                        print(board)
+
+                # Fallback to engine after deviation
+                else:
+                    # Fallback to engine after deviation
+                    best_move, best_score, principal_variation = engine.iterative_deepening(board)
+                    board.push(best_move)
+                    print("Computer played:", best_move)
+                    print("Principal variation:", " ".join(str(move) for move in principal_variation))
+                    print(board)
+
+
+    # Game over
+        if board.is_game_over():
+            result = board.outcome().result()
+            if result == "1-0":
+                print("\nGame over! You won!")
+            elif result == "0-1":
+                print("\nGame over! Computer won!")
+            else:
+                print("\nGame over! It's a draw!")
+
+            print("Final position:")
+            print(board)
+            print("PGN:", board.variation_san(board.move_stack))
+
+if __name__ == "__main__":
+    engine = ChessEngine()
+    engine.play_game()
